@@ -26,12 +26,12 @@ app.use(express.json());
 // jwt middlewares
 const verifyJWT = async (req, res, next) => {
   const token = req?.headers?.authorization?.split(" ")[1];
-  console.log(token);
+  //console.log(token);
   if (!token) return res.status(401).send({ message: "Unauthorized Access!" });
   try {
     const decoded = await admin.auth().verifyIdToken(token);
     req.tokenEmail = decoded.email;
-    console.log(decoded);
+    //console.log(decoded);
     next();
   } catch (err) {
     console.log(err);
@@ -79,7 +79,22 @@ async function run() {
 
     // Save a product data in db
     app.post("/products", verifyJWT, verifySELLER, async (req, res) => {
-      const productData = req.body;
+      const { image, name, description, quantity, price, category, seller } =
+        req.body;
+      //adding date
+      const date = new Date().toISOString().split("T")[0];
+
+      const productData = {
+        image,
+        name,
+        description,
+        quantity: parseInt(quantity),
+        price: parseFloat(price),
+        category,
+        seller,
+        date,
+      };
+
       console.log(productData);
       const result = await productsCollection.insertOne(productData);
       res.send(result);
@@ -99,11 +114,20 @@ async function run() {
       });
       res.send(result);
     });
+    // latest data
+    app.get("/latest-products", async (req, res) => {
+      const result = await productsCollection
+        .find()
+        .sort({ date: "desc" })
+        .limit(6)
+        .toArray();
+      res.send(result);
+    });
 
     // Payment endpoints
     app.post("/create-checkout-session", async (req, res) => {
       const paymentInfo = req.body;
-      console.log(paymentInfo);
+      //console.log(paymentInfo);
       const session = await stripe.checkout.sessions.create({
         line_items: [
           {
