@@ -79,23 +79,29 @@ async function run() {
 
     // Save a product data in db
     app.post("/products", verifyJWT, verifySELLER, async (req, res) => {
-      const { image, name, description, quantity, price, category, seller } =
-        req.body;
-      //adding date
-      const date = new Date().toISOString().split("T")[0];
+      const {
+        image,
+        name,
+        description,
+        quantity,
+        price,
+        category,
+        minimumOrder,
+        seller,
+      } = req.body;
 
       const productData = {
         image,
         name,
         description,
-        quantity: parseInt(quantity),
-        price: parseFloat(price),
+        quantity: Number(quantity),
+        price: Number(price),
+        minimumOrder: Number(minimumOrder),
         category,
         seller,
-        date,
+        date: new Date(),
       };
 
-      console.log(productData);
       const result = await productsCollection.insertOne(productData);
       res.send(result);
     });
@@ -126,79 +132,81 @@ async function run() {
 
     // Payment endpoints
     app.post("/create-checkout-session", async (req, res) => {
-      const paymentInfo = req.body;
-      //console.log(paymentInfo);
+      const order = req.body;
+      console.log("Order Received---> ", order);
+      const product = await productsCollection.findOne({
+        _id: new ObjectId(order.productId),
+      });
+
+      if (
+        !product ||
+        order.quantity < product.minimumOrder ||
+        order.quantity > product.quantity
+      ) {
+        return res.status(400).send({ message: "Invalid order quantity" });
+      }
+
       const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
         line_items: [
           {
             price_data: {
               currency: "usd",
               product_data: {
-                name: paymentInfo?.name,
-                description: paymentInfo?.description,
-                images: [paymentInfo.image],
+                name: order.productName,
+                images: [order.image],
               },
-              unit_amount: paymentInfo?.price * 100,
+              unit_amount: order.unitPrice * 100,
             },
-            quantity: paymentInfo?.quantity,
+            quantity: order.quantity,
           },
         ],
-        customer_email: paymentInfo?.customer?.email,
         mode: "payment",
+        customer_email: order.customer.email,
         metadata: {
-          productId: paymentInfo?.productId,
-          customer: paymentInfo?.customer.email,
+          productId: order.productId,
+          customerEmail: order.customer.email,
         },
         success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.CLIENT_DOMAIN}/product/${paymentInfo?.productId}`,
+        cancel_url: `${process.env.CLIENT_DOMAIN}/product/${order.productId}`,
       });
+
       res.send({ url: session.url });
     });
 
     app.post("/payment-success", async (req, res) => {
       const { sessionId } = req.body;
       const session = await stripe.checkout.sessions.retrieve(sessionId);
-      const product = await productsCollection.findOne({
-        _id: new ObjectId(session.metadata.productId),
-      });
-      const order = await ordersCollection.findOne({
-        transactionId: session.payment_intent,
-      });
 
-      if (session.status === "complete" && product && !order) {
-        // save order data in db
-        const orderInfo = {
-          productId: session.metadata.productId,
-          transactionId: session.payment_intent,
-          customer: session.metadata.customer,
-          status: "pending",
-          seller: product.seller,
-          name: product.name,
-          category: product.category,
-          quantity: 1,
-          price: session.amount_total / 100,
-          image: product?.image,
-        };
-        const result = await ordersCollection.insertOne(orderInfo);
-        // update product quantity
-        await productsCollection.updateOne(
-          {
-            _id: new ObjectId(session.metadata.productId),
+      await ordersCollection.updateOne(
+        { "customer.email": session.customer_email },
+        {
+          $set: {
+            paymentStatus: "paid",
+            transactionId: session.payment_intent,
           },
-          { $inc: { quantity: -1 } }
-        );
-
-        return res.send({
-          transactionId: session.payment_intent,
-          orderId: result.insertedId,
-        });
-      }
-      res.send(
-        res.send({
-          transactionId: session.payment_intent,
-          orderId: order._id,
-        })
+        }
       );
+
+      res.send({ success: true });
+    });
+    // save an order in db
+    app.post("/orders", async (req, res) => {
+      const order = req.body;
+
+      const result = await ordersCollection.insertOne({
+        ...order,
+        createdAt: new Date(),
+        orderStatus: "pending", // seller workflow
+        paymentStatus: order.paymentStatus,
+      });
+
+      await productsCollection.updateOne(
+        { _id: new ObjectId(order.productId) },
+        { $inc: { quantity: -order.quantity } }
+      );
+
+      res.send(result);
     });
 
     // get all orders for a customer by email
