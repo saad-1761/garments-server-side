@@ -133,18 +133,6 @@ async function run() {
     // Payment endpoints
     app.post("/create-checkout-session", async (req, res) => {
       const order = req.body;
-      console.log("Order Received---> ", order);
-      const product = await productsCollection.findOne({
-        _id: new ObjectId(order.productId),
-      });
-
-      if (
-        !product ||
-        order.quantity < product.minimumOrder ||
-        order.quantity > product.quantity
-      ) {
-        return res.status(400).send({ message: "Invalid order quantity" });
-      }
 
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
@@ -154,7 +142,6 @@ async function run() {
               currency: "usd",
               product_data: {
                 name: order.productName,
-                images: [order.image],
               },
               unit_amount: order.unitPrice * 100,
             },
@@ -163,10 +150,17 @@ async function run() {
         ],
         mode: "payment",
         customer_email: order.customer.email,
+
+        // 🔴 STORE EVERYTHING YOU NEED
         metadata: {
           productId: order.productId,
+          quantity: order.quantity,
+          unitPrice: order.unitPrice,
+          totalPrice: order.totalPrice,
           customerEmail: order.customer.email,
+          paymentMethod: "online",
         },
+
         success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.CLIENT_DOMAIN}/product/${order.productId}`,
       });
@@ -174,35 +168,105 @@ async function run() {
       res.send({ url: session.url });
     });
 
+    // successful payment
     app.post("/payment-success", async (req, res) => {
       const { sessionId } = req.body;
+
       const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-      await ordersCollection.updateOne(
-        { "customer.email": session.customer_email },
-        {
-          $set: {
-            paymentStatus: "paid",
-            transactionId: session.payment_intent,
-          },
-        }
+      if (session.payment_status !== "paid") {
+        return res.status(400).send({ message: "Payment not completed" });
+      }
+
+      const productId = session.metadata.productId;
+      const quantity = Number(session.metadata.quantity);
+
+      // Prevent duplicate order
+      const existingOrder = await ordersCollection.findOne({
+        transactionId: session.payment_intent,
+      });
+
+      if (existingOrder) {
+        return res.send(existingOrder);
+      }
+
+      const product = await productsCollection.findOne({
+        _id: new ObjectId(productId),
+      });
+
+      if (!product) {
+        return res.status(404).send({ message: "Product not found" });
+      }
+
+      // 🔒 Enforce min order & stock AGAIN (backend safety)
+      if (quantity < product.minimumOrder || quantity > product.quantity) {
+        return res.status(400).send({ message: "Invalid order quantity" });
+      }
+
+      // ✅ Create order
+      const orderData = {
+        productId,
+        productName: product.name,
+        category: product.category,
+        image: product.image,
+        description: product.description,
+        unitPrice: product.price,
+        quantity,
+        totalPrice: session.amount_total / 100,
+        paymentMethod: "online",
+        paymentStatus: "paid",
+        transactionId: session.payment_intent,
+        seller: product.seller,
+        customer: {
+          email: session.customer_email,
+        },
+        createdAt: new Date(),
+        orderStatus: "pending",
+      };
+
+      const result = await ordersCollection.insertOne(orderData);
+
+      // ✅ Update stock
+      await productsCollection.updateOne(
+        { _id: product._id },
+        { $inc: { quantity: -quantity } }
       );
 
-      res.send({ success: true });
+      res.send(result);
     });
+
     // save an order in db
     app.post("/orders", async (req, res) => {
       const order = req.body;
 
+      if (order.paymentMethod !== "cod") {
+        return res.status(400).send({ message: "Invalid payment method" });
+      }
+
+      const product = await productsCollection.findOne({
+        _id: new ObjectId(order.productId),
+      });
+
+      if (!product) {
+        return res.status(404).send({ message: "Product not found" });
+      }
+
+      if (
+        order.quantity < product.minimumOrder ||
+        order.quantity > product.quantity
+      ) {
+        return res.status(400).send({ message: "Invalid order quantity" });
+      }
+
       const result = await ordersCollection.insertOne({
         ...order,
         createdAt: new Date(),
-        orderStatus: "pending", // seller workflow
-        paymentStatus: order.paymentStatus,
+        orderStatus: "pending",
+        paymentStatus: "pending",
       });
 
       await productsCollection.updateOne(
-        { _id: new ObjectId(order.productId) },
+        { _id: product._id },
         { $inc: { quantity: -order.quantity } }
       );
 
@@ -211,10 +275,14 @@ async function run() {
 
     // get all orders for a customer by email
     app.get("/my-orders", verifyJWT, async (req, res) => {
-      const result = await ordersCollection
-        .find({ customer: req.tokenEmail })
+      const email = req.tokenEmail;
+
+      const orders = await ordersCollection
+        .find({ "customer.email": email })
+        .sort({ createdAt: -1 })
         .toArray();
-      res.send(result);
+
+      res.send(orders);
     });
 
     // get all orders for a seller by email
@@ -223,12 +291,15 @@ async function run() {
       verifyJWT,
       verifySELLER,
       async (req, res) => {
-        const email = req.params.email;
+        console.log(req.user);
+        const sellerEmail = req.params.email;
 
-        const result = await ordersCollection
-          .find({ "seller.email": email })
+        const orders = await ordersCollection
+          .find({ "seller.email": sellerEmail })
+          .sort({ createdAt: -1 })
           .toArray();
-        res.send(result);
+
+        res.send(orders);
       }
     );
 
@@ -238,12 +309,15 @@ async function run() {
       verifyJWT,
       verifySELLER,
       async (req, res) => {
-        const email = req.params.email;
+        console.log(req.user);
+        const sellerEmail = req.params.email;
 
-        const result = await productsCollection
-          .find({ "seller.email": email })
+        const products = await productsCollection
+          .find({ "seller.email": sellerEmail })
+          .sort({ date: -1 })
           .toArray();
-        res.send(result);
+
+        res.send(products);
       }
     );
 
