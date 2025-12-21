@@ -330,30 +330,72 @@ async function run() {
     );
 
     // save or update a user in db
+    // app.post("/user", async (req, res) => {
+    //   const userData = req.body;
+    //   userData.created_at = new Date().toISOString();
+    //   userData.last_loggedIn = new Date().toISOString();
+    //   userData.role = "customer";
+
+    //   const query = {
+    //     email: userData.email,
+    //   };
+
+    //   const alreadyExists = await usersCollection.findOne(query);
+    //   console.log("User Already Exists---> ", !!alreadyExists);
+
+    //   if (alreadyExists) {
+    //     console.log("Updating user info......");
+    //     const result = await usersCollection.updateOne(query, {
+    //       $set: {
+    //         last_loggedIn: new Date().toISOString(),
+    //       },
+    //     });
+    //     return res.send(result);
+    //   }
+
+    //   console.log("Saving new user info......");
+    //   const result = await usersCollection.insertOne(userData);
+    //   res.send(result);
+    // });
+
     app.post("/user", async (req, res) => {
-      const userData = req.body;
-      userData.created_at = new Date().toISOString();
-      userData.last_loggedIn = new Date().toISOString();
-      userData.role = "customer";
+      const { name, email, image } = req.body;
 
-      const query = {
-        email: userData.email,
-      };
+      if (!email) {
+        return res.status(400).send({ message: "Email is required" });
+      }
 
+      const query = { email };
       const alreadyExists = await usersCollection.findOne(query);
       console.log("User Already Exists---> ", !!alreadyExists);
 
+      // ✅ If user already exists: only update last_loggedIn (keep role, created_at, etc.)
       if (alreadyExists) {
         console.log("Updating user info......");
-        const result = await usersCollection.updateOne(query, {
-          $set: {
-            last_loggedIn: new Date().toISOString(),
-          },
-        });
+
+        // Optional: if existing user missing name/image, fill them once (safe)
+        const setObj = {
+          last_loggedIn: new Date().toISOString(),
+        };
+        if (!alreadyExists?.name && name) setObj.name = name;
+        if (!alreadyExists?.image && image) setObj.image = image;
+
+        const result = await usersCollection.updateOne(query, { $set: setObj });
         return res.send(result);
       }
 
+      // ✅ If new user: insert full record
       console.log("Saving new user info......");
+
+      const userData = {
+        name: name || "User",
+        email,
+        image: image || "",
+        role: "customer",
+        created_at: new Date().toISOString(),
+        last_loggedIn: new Date().toISOString(),
+      };
+
       const result = await usersCollection.insertOne(userData);
       res.send(result);
     });
@@ -475,6 +517,69 @@ async function run() {
         { $set: { role } }
       );
       await sellerRequestsCollection.deleteOne({ email });
+
+      res.send(result);
+    });
+    ///////////////////////////////////////////
+    //Update user-profile
+
+    // app.patch("/users/me", verifyJWT, async (req, res) => {
+    //   try {
+    //     const email = req.tokenEmail; // from verifyJWT
+    //     const { name, image } = req.body;
+
+    //     if (!email) return res.status(401).send({ message: "Unauthorized" });
+
+    //     const updateDoc = {
+    //       $set: {
+    //         ...(name ? { name } : {}),
+    //         ...(image !== undefined ? { image } : {}),
+    //         last_loggedIn: new Date(), // optional but nice
+    //       },
+    //     };
+
+    //     const result = await usersCollection.updateOne({ email }, updateDoc);
+
+    //     res.send({ success: true, result });
+    //   } catch (err) {
+    //     res.status(500).send({ success: false, message: err.message });
+    //   }
+    // });
+    app.get("/users/me", verifyJWT, async (req, res) => {
+      const email = req.tokenEmail;
+      if (!email)
+        return res.status(401).send({ message: "Unauthorized Access!" });
+
+      const me = await usersCollection.findOne({ email });
+      res.send(me);
+    });
+
+    const { ObjectId } = require("mongodb");
+
+    app.patch("/users/:id", verifyJWT, async (req, res) => {
+      const email = req.tokenEmail;
+      if (!email)
+        return res.status(401).send({ message: "Unauthorized Access!" });
+
+      const { id } = req.params;
+      const { name, image } = req.body;
+
+      const updateDoc = {
+        $set: {
+          ...(name ? { name } : {}),
+          ...(image ? { image } : {}),
+          last_loggedIn: new Date().toISOString(),
+        },
+      };
+
+      const result = await usersCollection.updateOne(
+        { _id: new ObjectId(id), email },
+        updateDoc
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(403).send({ message: "Forbidden" });
+      }
 
       res.send(result);
     });
