@@ -391,7 +391,75 @@ async function run() {
         .toArray();
       res.send(result);
     });
+    //get all prducts for admin
+    app.get("/all-product", verifyJWT, verifyADMIN, async (req, res) => {
+      const result = await productsCollection.find().toArray();
+      res.send(result);
+    });
+    ///////////////
+    app.patch(
+      "/products/:id/show-home",
+      verifyJWT,
+      verifyADMIN,
+      async (req, res) => {
+        const { id } = req.params;
+        const { showOnHome, bumpDate } = req.body;
 
+        const updateDoc = {
+          $set: {
+            showOnHome: !!showOnHome,
+          },
+        };
+
+        // ✅ When showOnHome becomes true → set date to NOW so it appears latest
+        if (showOnHome && bumpDate) {
+          updateDoc.$set.date = new Date();
+        }
+
+        const result = await productsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          updateDoc
+        );
+
+        res.send(result);
+      }
+    );
+
+    app.patch("/products/:id", verifyJWT, verifyADMIN, async (req, res) => {
+      const { id } = req.params;
+      const data = req.body;
+
+      const updateDoc = {
+        $set: {
+          name: data.name,
+          description: data.description,
+          price: Number(data.price),
+          category: data.category,
+          image: data.image,
+          quantity: Number(data.quantity || 0),
+          minimumOrder: Number(data.minimumOrder || 0),
+          demoVideo: data.demoVideo || "",
+          paymentOptions: data.paymentOptions || "",
+          updatedAt: new Date(),
+        },
+      };
+
+      const result = await productsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        updateDoc
+      );
+      res.send(result);
+    });
+
+    app.delete("/products/:id", verifyJWT, verifyADMIN, async (req, res) => {
+      const { id } = req.params;
+      const result = await productsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    //////////////////////
     // update a user's role
     app.patch("/update-role", verifyJWT, verifyADMIN, async (req, res) => {
       const { email, role } = req.body;
