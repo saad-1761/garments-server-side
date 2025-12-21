@@ -554,7 +554,7 @@ async function run() {
       res.send(me);
     });
 
-    const { ObjectId } = require("mongodb");
+    // const { ObjectId } = require("mongodb");
 
     app.patch("/users/:id", verifyJWT, async (req, res) => {
       const email = req.tokenEmail;
@@ -582,6 +582,46 @@ async function run() {
       }
 
       res.send(result);
+    });
+
+    ///order cancel by user
+    app.delete("/orders/:id", verifyJWT, async (req, res) => {
+      const email = req.tokenEmail;
+      const { id } = req.params;
+
+      if (!email)
+        return res.status(401).send({ message: "Unauthorized Access!" });
+
+      const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+      if (!order) return res.status(404).send({ message: "Order not found" });
+
+      // must be the owner
+      if (order?.customer?.email !== email) {
+        return res.status(403).send({ message: "Forbidden" });
+      }
+
+      // only pending + unpaid can cancel
+      if (
+        (order?.orderStatus || "").toLowerCase() !== "pending" ||
+        (order?.paymentStatus || "").toLowerCase() !== "pending"
+      ) {
+        return res
+          .status(400)
+          .send({ message: "Only pending unpaid orders can be cancelled" });
+      }
+
+      // ✅ restore stock
+      await productsCollection.updateOne(
+        { _id: new ObjectId(order.productId) },
+        { $inc: { quantity: Number(order.quantity) } }
+      );
+
+      // ✅ delete the order
+      const result = await ordersCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+
+      res.send({ success: true, result });
     });
 
     // Send a ping to confirm a successful connection
