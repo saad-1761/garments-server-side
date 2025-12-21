@@ -153,7 +153,7 @@ async function run() {
         mode: "payment",
         customer_email: order.customer.email,
 
-        // 🔴 STORE EVERYTHING YOU NEED
+        // metadata
         metadata: {
           productId: order.productId,
           quantity: order.quantity,
@@ -391,7 +391,7 @@ async function run() {
         .toArray();
       res.send(result);
     });
-    //get all prducts for admin
+    //get all products for admin
     app.get("/all-product", verifyJWT, verifyADMIN, async (req, res) => {
       const result = await productsCollection.find().toArray();
       res.send(result);
@@ -460,6 +460,13 @@ async function run() {
     });
 
     //////////////////////
+
+    // get all orders for admin
+    app.get("/all-order", verifyJWT, verifyADMIN, async (req, res) => {
+      const result = await ordersCollection.find().toArray();
+      res.send(result);
+    });
+
     // update a user's role
     app.patch("/update-role", verifyJWT, verifyADMIN, async (req, res) => {
       const { email, role } = req.body;
