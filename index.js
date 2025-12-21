@@ -133,6 +133,7 @@ async function run() {
     // Payment endpoints
     app.post("/create-checkout-session", async (req, res) => {
       const order = req.body;
+      console.log(order);
 
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
@@ -142,6 +143,7 @@ async function run() {
               currency: "usd",
               product_data: {
                 name: order.productName,
+                images: [order.image],
               },
               unit_amount: order.unitPrice * 100,
             },
@@ -158,6 +160,9 @@ async function run() {
           unitPrice: order.unitPrice,
           totalPrice: order.totalPrice,
           customerEmail: order.customer.email,
+          customerName: order.customer.name,
+          customerImage: order.customer.image,
+
           paymentMethod: "online",
         },
 
@@ -173,6 +178,7 @@ async function run() {
       const { sessionId } = req.body;
 
       const session = await stripe.checkout.sessions.retrieve(sessionId);
+      console.log(session);
 
       if (session.payment_status !== "paid") {
         return res.status(400).send({ message: "Payment not completed" });
@@ -219,6 +225,8 @@ async function run() {
         seller: product.seller,
         customer: {
           email: session.customer_email,
+          name: session.metadata.customerName,
+          image: session.metadata.customerImage,
         },
         createdAt: new Date(),
         orderStatus: "pending",
