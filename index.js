@@ -39,6 +39,20 @@ const verifyJWT = async (req, res, next) => {
   }
 };
 
+// const verifyJWT = async (req, res, next) => {
+//   const token = req?.headers?.authorization?.split(" ")[1];
+//   if (!token) return res.status(401).send({ message: "Unauthorized Access!" });
+
+//   try {
+//     const decoded = await admin.auth().verifyIdToken(token);
+//     req.tokenEmail = decoded.email;
+//     req.tokenUid = decoded.uid;
+//     next();
+//   } catch (err) {
+//     return res.status(401).send({ message: "Unauthorized Access!", err });
+//   }
+// };
+
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(process.env.MONGODB_URI, {
   serverApi: {
@@ -67,6 +81,20 @@ async function run() {
 
       next();
     };
+
+    // const verifyADMIN = async (req, res, next) => {
+    //   const email = req.tokenEmail;
+    //   const user = await usersCollection.findOne({ email });
+
+    //   if ((user?.role || "").toLowerCase() !== "admin") {
+    //     return res.status(403).send({
+    //       message: "Admin only Actions!",
+    //       role: user?.role,
+    //     });
+    //   }
+    //   next();
+    // };
+
     const verifyMANAGER = async (req, res, next) => {
       const email = req.tokenEmail;
       const user = await usersCollection.findOne({ email });
@@ -77,6 +105,43 @@ async function run() {
 
       next();
     };
+
+    // const verifyMANAGER = async (req, res, next) => {
+    //   const email = req.tokenEmail;
+    //   const user = await usersCollection.findOne({ email });
+
+    //   if ((user?.role || "").toLowerCase() !== "manager") {
+    //     return res.status(403).send({
+    //       message: "Manager only Actions!",
+    //       role: user?.role,
+    //     });
+    //   }
+    //   next();
+    // };
+
+    // ✅ customer-only + block suspended
+    // const verifyNotSuspendedCustomer = async (req, res, next) => {
+    //   const email = req.tokenEmail;
+    //   const user = await usersCollection.findOne({ email });
+
+    //   if (!user) return res.status(404).send({ message: "User not found" });
+
+    //   if ((user?.suspension?.isSuspended || false) === true) {
+    //     return res.status(403).send({
+    //       message: "Your account is suspended",
+    //       suspension: user?.suspension,
+    //     });
+    //   }
+
+    //   if ((user?.role || "").toLowerCase() !== "customer") {
+    //     return res.status(403).send({
+    //       message: "Only customers can place orders",
+    //       role: user?.role,
+    //     });
+    //   }
+
+    //   next();
+    // };
 
     //manager routes
     // Save a product data in db
@@ -486,6 +551,54 @@ async function run() {
       res.send({ url: session.url });
     });
 
+    // app.post(
+    //   "/create-checkout-session",
+    //   verifyJWT,
+    //   verifyNotSuspendedCustomer,
+    //   async (req, res) => {
+    //     const order = req.body;
+
+    //     if (order?.customer?.email !== req.tokenEmail) {
+    //       return res
+    //         .status(403)
+    //         .send({ message: "Forbidden order owner mismatch" });
+    //     }
+
+    //     const session = await stripe.checkout.sessions.create({
+    //       payment_method_types: ["card"],
+    //       line_items: [
+    //         {
+    //           price_data: {
+    //             currency: "usd",
+    //             product_data: {
+    //               name: order.productName,
+    //               images: [order.image],
+    //             },
+    //             unit_amount: order.unitPrice * 100,
+    //           },
+    //           quantity: order.quantity,
+    //         },
+    //       ],
+    //       mode: "payment",
+    //       customer_email: order.customer.email,
+    //       metadata: {
+    //         productId: order.productId,
+    //         quantity: order.quantity,
+    //         unitPrice: order.unitPrice,
+    //         totalPrice: order.totalPrice,
+    //         customerEmail: order.customer.email,
+    //         customerName: order.customer.name,
+    //         customerImage: order.customer.image,
+    //         paymentMethod: "online",
+    //       },
+    //       success_url: `${process.env.CLIENT_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+    //       cancel_url: `${process.env.CLIENT_DOMAIN}/product/${order.productId}`,
+    //     });
+
+    //     res.send({ url: session.url });
+    //   }
+    // );
+
     // successful payment
     app.post("/payment-success", async (req, res) => {
       const { sessionId } = req.body;
@@ -593,6 +706,54 @@ async function run() {
 
       res.send(result);
     });
+
+    // app.post(
+    //   "/orders",
+    //   verifyJWT,
+    //   verifyNotSuspendedCustomer,
+    //   async (req, res) => {
+    //     const order = req.body;
+
+    //     // ✅ enforce token email == customer email
+    //     if (order?.customer?.email !== req.tokenEmail) {
+    //       return res
+    //         .status(403)
+    //         .send({ message: "Forbidden order owner mismatch" });
+    //     }
+
+    //     if (order.paymentMethod !== "cod") {
+    //       return res.status(400).send({ message: "Invalid payment method" });
+    //     }
+
+    //     const product = await productsCollection.findOne({
+    //       _id: new ObjectId(order.productId),
+    //     });
+
+    //     if (!product)
+    //       return res.status(404).send({ message: "Product not found" });
+
+    //     if (
+    //       order.quantity < product.minimumOrder ||
+    //       order.quantity > product.quantity
+    //     ) {
+    //       return res.status(400).send({ message: "Invalid order quantity" });
+    //     }
+
+    //     const result = await ordersCollection.insertOne({
+    //       ...order,
+    //       createdAt: new Date(),
+    //       orderStatus: "pending",
+    //       paymentStatus: "pending",
+    //     });
+
+    //     await productsCollection.updateOne(
+    //       { _id: product._id },
+    //       { $inc: { quantity: -order.quantity } }
+    //     );
+
+    //     res.send(result);
+    //   }
+    // );
 
     // get all orders for a customer by email
     app.get("/my-orders", verifyJWT, async (req, res) => {
@@ -713,6 +874,47 @@ async function run() {
       res.send(result);
     });
 
+    // app.post("/user", async (req, res) => {
+    //   const { name, email, image } = req.body;
+
+    //   if (!email) return res.status(400).send({ message: "Email is required" });
+
+    //   const query = { email };
+    //   const alreadyExists = await usersCollection.findOne(query);
+
+    //   if (alreadyExists) {
+    //     const setObj = {
+    //       last_loggedIn: new Date().toISOString(),
+    //     };
+    //     if (!alreadyExists?.name && name) setObj.name = name;
+    //     if (!alreadyExists?.image && image) setObj.image = image;
+
+    //     const result = await usersCollection.updateOne(query, { $set: setObj });
+    //     return res.send(result);
+    //   }
+
+    //   const userData = {
+    //     name: name || "User",
+    //     email,
+    //     image: image || "",
+    //     role: "customer",
+    //     created_at: new Date().toISOString(),
+    //     last_loggedIn: new Date().toISOString(),
+
+    //     // ✅ suspension model
+    //     suspension: {
+    //       isSuspended: false,
+    //       reason: "",
+    //       feedback: "",
+    //       suspendedAt: null,
+    //       suspendedBy: null,
+    //     },
+    //   };
+
+    //   const result = await usersCollection.insertOne(userData);
+    //   res.send(result);
+    // });
+
     // get a user's role
     app.get("/user/role", verifyJWT, async (req, res) => {
       const result = await usersCollection.findOne({ email: req.tokenEmail });
@@ -746,6 +948,15 @@ async function run() {
         .toArray();
       res.send(result);
     });
+
+    // app.get("/users", verifyJWT, verifyADMIN, async (req, res) => {
+    //   const users = await usersCollection
+    //     .find()
+    //     .sort({ created_at: -1 })
+    //     .toArray();
+    //   res.send(users);
+    // });
+
     //get all products for admin
     app.get("/all-product", verifyJWT, verifyADMIN, async (req, res) => {
       const result = await productsCollection.find().toArray();
@@ -833,6 +1044,40 @@ async function run() {
 
       res.send(result);
     });
+
+    // app.patch("/update-role", verifyJWT, verifyADMIN, async (req, res) => {
+    //   const { email, role, suspension } = req.body;
+
+    //   if (!email) return res.status(400).send({ message: "Email required" });
+
+    //   const update = { $set: {} };
+
+    //   // ✅ role update
+    //   if (role) update.$set.role = role.toLowerCase();
+
+    //   // ✅ suspension update
+    //   if (suspension && typeof suspension === "object") {
+    //     const isSuspended = !!suspension.isSuspended;
+
+    //     update.$set["suspension.isSuspended"] = isSuspended;
+    //     update.$set["suspension.reason"] = suspension.reason || "";
+    //     update.$set["suspension.feedback"] = suspension.feedback || "";
+    //     update.$set["suspension.suspendedAt"] = isSuspended
+    //       ? new Date().toISOString()
+    //       : null;
+    //     update.$set["suspension.suspendedBy"] = isSuspended
+    //       ? req.tokenEmail
+    //       : null;
+    //   }
+
+    //   const result = await usersCollection.updateOne({ email }, update);
+
+    //   // if role was updated from requests area, remove request (optional safe)
+    //   await sellerRequestsCollection.deleteOne({ email });
+
+    //   res.send(result);
+    // });
+
     ///////////////////////////////////////////
     //Update user-profile
 
@@ -858,6 +1103,7 @@ async function run() {
     //     res.status(500).send({ success: false, message: err.message });
     //   }
     // });
+
     app.get("/users/me", verifyJWT, async (req, res) => {
       const email = req.tokenEmail;
       if (!email)
@@ -866,6 +1112,12 @@ async function run() {
       const me = await usersCollection.findOne({ email });
       res.send(me);
     });
+
+    // app.get("/users/me", verifyJWT, async (req, res) => {
+    //   const email = req.tokenEmail;
+    //   const user = await usersCollection.findOne({ email });
+    //   res.send(user);
+    // });
 
     // const { ObjectId } = require("mongodb");
 
