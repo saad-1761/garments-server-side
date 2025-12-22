@@ -54,6 +54,7 @@ async function run() {
     const ordersCollection = db.collection("orders");
     const usersCollection = db.collection("users");
     const sellerRequestsCollection = db.collection("sellerRequests");
+    const trackingCollection = db.collection("tracking");
 
     // role middlewares
     const verifyADMIN = async (req, res, next) => {
@@ -66,7 +67,7 @@ async function run() {
 
       next();
     };
-    const verifySELLER = async (req, res, next) => {
+    const verifyMANAGER = async (req, res, next) => {
       const email = req.tokenEmail;
       const user = await usersCollection.findOne({ email });
       if (user?.role !== "seller")
@@ -77,33 +78,345 @@ async function run() {
       next();
     };
 
+    //manager routes
     // Save a product data in db
-    app.post("/products", verifyJWT, verifySELLER, async (req, res) => {
-      const {
-        image,
-        name,
-        description,
-        quantity,
-        price,
-        category,
-        minimumOrder,
-        seller,
-      } = req.body;
 
-      const productData = {
-        image,
-        name,
-        description,
-        quantity: Number(quantity),
-        price: Number(price),
-        minimumOrder: Number(minimumOrder),
-        category,
-        seller,
-        date: new Date(),
-      };
+    // app.post("/products", verifyJWT, verifyMANAGER, async (req, res) => {
+    //   const {
+    //     image,
+    //     name,
+    //     description,
+    //     quantity,
+    //     price,
+    //     category,
+    //     minimumOrder,
+    //     seller,
+    //   } = req.body;
 
-      const result = await productsCollection.insertOne(productData);
-      res.send(result);
+    //   const productData = {
+    //     image,
+    //     name,
+    //     description,
+    //     quantity: Number(quantity),
+    //     price: Number(price),
+    //     minimumOrder: Number(minimumOrder),
+    //     category,
+    //     seller,
+    //     date: new Date(),
+    //   };
+
+    //   const result = await productsCollection.insertOne(productData);
+    //   res.send(result);
+    // });
+
+    app.post("/products", verifyJWT, verifyMANAGER, async (req, res) => {
+      try {
+        const managerEmail = req.tokenEmail;
+
+        const {
+          image, // old support
+          images = [], // new support
+          name,
+          description,
+          quantity,
+          price,
+          category,
+          minimumOrder,
+          demoVideoLink = "",
+          paymentOption = "cod", // "cod" | "payfirst"
+          showOnHome = false,
+          seller,
+        } = req.body;
+
+        const finalImages =
+          Array.isArray(images) && images.length
+            ? images
+            : image
+            ? [image]
+            : [];
+
+        const productData = {
+          image: finalImages[0] || image || "",
+          images: finalImages, // new (safe)
+          name,
+          description,
+          quantity: Number(quantity),
+          price: Number(price),
+          minimumOrder: Number(minimumOrder),
+          category,
+          demoVideoLink,
+          paymentOption,
+          showOnHome: Boolean(showOnHome),
+          seller: {
+            name: seller?.name,
+            email: managerEmail,
+            image: seller?.image,
+          },
+          date: new Date(),
+        };
+
+        const result = await productsCollection.insertOne(productData);
+        res.send(result);
+      } catch (err) {
+        res.status(500).send({ message: err.message });
+      }
+    });
+
+    //manager products list
+    app.get("/manager/products", verifyJWT, verifyMANAGER, async (req, res) => {
+      const email = req.tokenEmail;
+
+      const products = await productsCollection
+        .find({ "seller.email": email })
+        .sort({ date: -1 })
+        .toArray();
+
+      res.send(products);
+    });
+    //delete manager product
+
+    app.delete(
+      "/manager/products/:id",
+      verifyJWT,
+      verifyMANAGER,
+      async (req, res) => {
+        const email = req.tokenEmail;
+        const { id } = req.params;
+
+        const product = await productsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!product)
+          return res.status(404).send({ message: "Product not found" });
+
+        if (product?.seller?.email !== email) {
+          return res.status(403).send({ message: "Forbidden" });
+        }
+
+        const result = await productsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send({ success: true, result });
+      }
+    );
+
+    //update manager product
+    app.patch(
+      "/manager/products/:id",
+      verifyJWT,
+      verifyMANAGER,
+      async (req, res) => {
+        const email = req.tokenEmail;
+        const { id } = req.params;
+
+        const product = await productsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (!product)
+          return res.status(404).send({ message: "Product not found" });
+
+        if (product?.seller?.email !== email) {
+          return res.status(403).send({ message: "Forbidden" });
+        }
+
+        const {
+          name,
+          description,
+          category,
+          price,
+          quantity,
+          minimumOrder,
+          demoVideoLink,
+          paymentOption,
+          showOnHome,
+          images, // optional
+          image, // optional
+        } = req.body;
+
+        const finalImages =
+          Array.isArray(images) && images.length
+            ? images
+            : image
+            ? [image]
+            : product.images?.length
+            ? product.images
+            : product.image
+            ? [product.image]
+            : [];
+
+        const updateDoc = {
+          $set: {
+            ...(name ? { name } : {}),
+            ...(description ? { description } : {}),
+            ...(category ? { category } : {}),
+            ...(price !== undefined ? { price: Number(price) } : {}),
+            ...(quantity !== undefined ? { quantity: Number(quantity) } : {}),
+            ...(minimumOrder !== undefined
+              ? { minimumOrder: Number(minimumOrder) }
+              : {}),
+            ...(demoVideoLink !== undefined ? { demoVideoLink } : {}),
+            ...(paymentOption ? { paymentOption } : {}),
+            ...(showOnHome !== undefined
+              ? { showOnHome: Boolean(showOnHome) }
+              : {}),
+            ...(finalImages?.length
+              ? { images: finalImages, image: finalImages[0] }
+              : {}),
+          },
+        };
+
+        const result = await productsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          updateDoc
+        );
+
+        res.send({ success: true, result });
+      }
+    );
+
+    //manager orders list with status filter
+    app.get("/manager/orders", verifyJWT, verifyMANAGER, async (req, res) => {
+      const email = req.tokenEmail;
+      const status = (req.query.status || "").toLowerCase(); // pending/approved/rejected
+
+      const query = { "seller.email": email };
+      if (status) query.orderStatus = status;
+
+      const orders = await ordersCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      res.send(orders);
+    });
+
+    //approve order
+    app.patch(
+      "/manager/orders/:id/approve",
+      verifyJWT,
+      verifyMANAGER,
+      async (req, res) => {
+        const managerEmail = req.tokenEmail;
+        const { id } = req.params;
+
+        const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+        if (!order) return res.status(404).send({ message: "Order not found" });
+
+        if (order?.seller?.email !== managerEmail) {
+          return res.status(403).send({ message: "Forbidden" });
+        }
+
+        if ((order?.orderStatus || "").toLowerCase() !== "pending") {
+          return res
+            .status(400)
+            .send({ message: "Only pending orders can be approved" });
+        }
+
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { orderStatus: "approved", approvedAt: new Date() } }
+        );
+
+        res.send({ success: true, result });
+      }
+    );
+
+    //reject order
+    app.patch(
+      "/manager/orders/:id/reject",
+      verifyJWT,
+      verifyMANAGER,
+      async (req, res) => {
+        const managerEmail = req.tokenEmail;
+        const { id } = req.params;
+
+        const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+        if (!order) return res.status(404).send({ message: "Order not found" });
+
+        if (order?.seller?.email !== managerEmail) {
+          return res.status(403).send({ message: "Forbidden" });
+        }
+
+        if ((order?.orderStatus || "").toLowerCase() !== "pending") {
+          return res
+            .status(400)
+            .send({ message: "Only pending orders can be rejected" });
+        }
+
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { orderStatus: "rejected", rejectedAt: new Date() } }
+        );
+
+        res.send({ success: true, result });
+      }
+    );
+    //add tracking update (approved only)
+    app.post(
+      "/tracking/:orderId",
+      verifyJWT,
+      verifyMANAGER,
+      async (req, res) => {
+        const managerEmail = req.tokenEmail;
+        const { orderId } = req.params;
+        const { status, location, note } = req.body;
+
+        if (!status)
+          return res.status(400).send({ message: "Status is required" });
+
+        const order = await ordersCollection.findOne({
+          _id: new ObjectId(orderId),
+        });
+        if (!order) return res.status(404).send({ message: "Order not found" });
+
+        if (order?.seller?.email !== managerEmail) {
+          return res.status(403).send({ message: "Forbidden" });
+        }
+
+        if ((order?.orderStatus || "").toLowerCase() !== "approved") {
+          return res
+            .status(400)
+            .send({ message: "Order must be approved first" });
+        }
+
+        const trackingUpdate = {
+          status,
+          location: location || "",
+          note: note || "",
+          at: new Date(),
+          addedBy: { email: managerEmail },
+        };
+
+        const result = await trackingCollection.updateOne(
+          { orderId: new ObjectId(orderId) },
+          { $push: { updates: trackingUpdate } },
+          { upsert: true }
+        );
+
+        res.send({ success: true, result });
+      }
+    );
+
+    //get tracking
+    app.get("/tracking/:orderId", verifyJWT, async (req, res) => {
+      const email = req.tokenEmail;
+      const { orderId } = req.params;
+
+      const order = await ordersCollection.findOne({
+        _id: new ObjectId(orderId),
+      });
+      if (!order) return res.status(404).send({ message: "Order not found" });
+
+      const isCustomer = order?.customer?.email === email;
+      const isManager = order?.seller?.email === email;
+
+      if (!isCustomer && !isManager)
+        return res.status(403).send({ message: "Forbidden" });
+
+      const doc = await trackingCollection.findOne({
+        orderId: new ObjectId(orderId),
+      });
+      res.send(doc?.updates || []);
     });
 
     // get all products from db
@@ -297,7 +610,7 @@ async function run() {
     app.get(
       "/manage-orders/:email",
       verifyJWT,
-      verifySELLER,
+      verifyMANAGER,
       async (req, res) => {
         console.log(req.user);
         const sellerEmail = req.params.email;
@@ -315,7 +628,7 @@ async function run() {
     app.get(
       "/my-inventory/:email",
       verifyJWT,
-      verifySELLER,
+      verifyMANAGER,
       async (req, res) => {
         console.log(req.user);
         const sellerEmail = req.params.email;
