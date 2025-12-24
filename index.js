@@ -432,9 +432,39 @@ async function run() {
     });
 
     // get all products from db
+    // app.get("/products", async (req, res) => {
+    //   const result = await productsCollection.find().toArray();
+    //   res.send(result);
+    // });
+
+    // GET products with pagination
     app.get("/products", async (req, res) => {
-      const result = await productsCollection.find().toArray();
-      res.send(result);
+      try {
+        const page = Math.max(parseInt(req.query.page || "1"), 1);
+        const limit = Math.max(parseInt(req.query.limit || "6"), 1);
+        const skip = (page - 1) * limit;
+
+        // total count (for total pages)
+        const total = await productsCollection.countDocuments();
+
+        // paginated products
+        const products = await productsCollection
+          .find()
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        res.send({
+          products,
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to load products" });
+      }
     });
 
     // get a product from db
