@@ -431,12 +431,6 @@ async function run() {
       }
     });
 
-    // get all products from db
-    // app.get("/products", async (req, res) => {
-    //   const result = await productsCollection.find().toArray();
-    //   res.send(result);
-    // });
-
     // GET products with pagination
     app.get("/products", async (req, res) => {
       try {
@@ -444,12 +438,24 @@ async function run() {
         const limit = Math.max(parseInt(req.query.limit || "6"), 1);
         const skip = (page - 1) * limit;
 
-        // total count (for total pages)
-        const total = await productsCollection.countDocuments();
+        const search = (req.query.search || "").trim();
+        const category = (req.query.category || "").trim();
 
-        // paginated products
+        // ✅ server-side filter
+        const filter = {};
+
+        if (search) {
+          filter.name = { $regex: search, $options: "i" };
+        }
+
+        if (category) {
+          filter.category = category;
+        }
+
+        const total = await productsCollection.countDocuments(filter);
+
         const products = await productsCollection
-          .find()
+          .find(filter)
           .skip(skip)
           .limit(limit)
           .toArray();
@@ -464,6 +470,23 @@ async function run() {
       } catch (err) {
         console.error(err);
         res.status(500).send({ message: "Failed to load products" });
+      }
+    });
+    //category
+    app.get("/products/categories", async (req, res) => {
+      try {
+        const categories = await productsCollection
+          .aggregate([
+            { $match: { category: { $exists: true, $ne: "" } } },
+            { $group: { _id: "$category" } },
+            { $sort: { _id: 1 } },
+          ])
+          .toArray();
+
+        res.send(categories.map((c) => c._id));
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to load categories" });
       }
     });
 
@@ -766,7 +789,8 @@ async function run() {
       const result = await productsCollection.find().toArray();
       res.send(result);
     });
-    ///////////////
+
+    //
     app.patch(
       "/products/:id/show-home",
       verifyJWT,
@@ -941,7 +965,7 @@ async function run() {
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
-  res.send("Hello from Server..");
+  res.send("Welcome to La Fabrica Server...");
 });
 
 app.listen(port, () => {
