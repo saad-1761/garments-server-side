@@ -349,17 +349,36 @@ async function run() {
             .send({ message: "Order must be approved first" });
         }
 
+        // const trackingUpdate = {
+        //   status,
+        //   location: location || "",
+        //   note: note || "",
+        //   at: new Date(),
+        //   addedBy: { email: managerEmail },
+        // };
+
         const trackingUpdate = {
-          status,
-          location: location || "",
-          note: note || "",
+          status: status.trim(),
+          location: (location || "").trim(),
+          note: (note || "").trim(),
           at: new Date(),
           addedBy: { email: managerEmail },
         };
-
+        // const result = await trackingCollection.updateOne(
+        //   { orderId: new ObjectId(orderId) },
+        //   { $push: { updates: trackingUpdate } },
+        //   { upsert: true }
+        // );
         const result = await trackingCollection.updateOne(
           { orderId: new ObjectId(orderId) },
-          { $push: { updates: trackingUpdate } },
+          {
+            $setOnInsert: {
+              orderId: new ObjectId(orderId),
+              createdAt: new Date(),
+            },
+            $push: { updates: trackingUpdate },
+            $set: { updatedAt: new Date() },
+          },
           { upsert: true }
         );
 
@@ -377,8 +396,14 @@ async function run() {
       });
       if (!order) return res.status(404).send({ message: "Order not found" });
 
-      const isCustomer = order?.customer?.email === email;
-      const isManager = order?.seller?.email === email;
+      // const isCustomer = order?.customer?.email === email;
+      // const isManager = order?.seller?.email === email;
+
+      const isCustomer =
+        (order?.customer?.email || "").toLowerCase() === email.toLowerCase();
+
+      const isManager =
+        (order?.seller?.email || "").toLowerCase() === email.toLowerCase();
 
       if (!isCustomer && !isManager)
         return res.status(403).send({ message: "Forbidden" });
@@ -387,6 +412,23 @@ async function run() {
         orderId: new ObjectId(orderId),
       });
       res.send(doc?.updates || []);
+    });
+
+    // ✅ Customer: get my orders (for Track Orders list)
+    app.get("/orders/me", verifyJWT, async (req, res) => {
+      try {
+        const email = req.tokenEmail;
+
+        const result = await ordersCollection
+          .find({ "customer.email": email })
+          .sort({ createdAt: -1 }) // if you have createdAt; else use _id: -1
+          .toArray();
+
+        res.send(result);
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Server error" });
+      }
     });
 
     // get all products from db
