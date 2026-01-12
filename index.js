@@ -38,6 +38,28 @@ const verifyJWT = async (req, res, next) => {
     return res.status(401).send({ message: "Unauthorized Access!", err });
   }
 };
+//functions
+function toISODateOnly(d) {
+  const x = new Date(d);
+  return new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate()))
+    .toISOString()
+    .slice(0, 10); // YYYY-MM-DD
+}
+
+function buildLastNDaysSeries(n = 14) {
+  const days = [];
+  const today = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    const dt = new Date(today);
+    dt.setDate(today.getDate() - i);
+    days.push(toISODateOnly(dt));
+  }
+  return days;
+}
+
+function normalizeStatus(s) {
+  return (s || "pending").toString().toLowerCase();
+}
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(process.env.MONGODB_URI, {
@@ -953,8 +975,188 @@ async function run() {
       res.send({ success: true, result });
     });
 
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+//stats
+app.get("/stats/customer", verifyJWT, async (req, res) => {
+  try {
+    const email = req.tokenEmail;
+
+    const orders = await ordersCollection
+      .find({ "customer.email": email })
+      .toArray();
+
+    const totalOrders = orders.length;
+    const totalSpent = orders.reduce(
+      (sum, o) => sum + (Number(o.totalPrice) || 0),
+      0
+    );
+
+    const byStatus = orders.reduce((acc, o) => {
+      const s = normalizeStatus(o.orderStatus);
+      acc[s] = (acc[s] || 0) + 1;
+      return acc;
+    }, {});
+
+    // last 14 days orders count
+    const days = buildLastNDaysSeries(14);
+    const map = Object.fromEntries(days.map((d) => [d, 0]));
+
+    orders.forEach((o) => {
+      const created = o.createdAt?.$date || o.createdAt; // your db might store as Date
+      if (!created) return;
+      const key = toISODateOnly(created);
+      if (key in map) map[key] += 1;
+    });
+
+    const ordersByDay = days.map((d) => ({ date: d, orders: map[d] }));
+
+    res.send({
+      totalOrders,
+      totalSpent,
+      byStatus,
+      ordersByDay,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "Failed to load customer stats" });
+  }
+});
+
+//stats for seller/manager
+
+app.get("/stats/seller", verifyJWT, verifyMANAGER, async (req, res) => {
+  try {
+    const email = req.tokenEmail;
+
+    const [productCount, orders] = await Promise.all([
+      productsCollection.countDocuments({ "seller.email": email }),
+      ordersCollection.find({ "seller.email": email }).toArray(),
+    ]);
+
+    const totalOrders = orders.length;
+
+    const byStatus = orders.reduce((acc, o) => {
+      const s = normalizeStatus(o.orderStatus);
+      acc[s] = (acc[s] || 0) + 1;
+      return acc;
+    }, {});
+
+    // revenue (approved signals fulfillment)
+    const revenue = orders
+      .filter((o) => normalizeStatus(o.orderStatus) === "approved")
+      .reduce((sum, o) => sum + (Number(o.totalPrice) || 0), 0);
+
+    // top products by order count
+    const topMap = {};
+    orders.forEach((o) => {
+      const k = o.productName || "Unknown";
+      topMap[k] = (topMap[k] || 0) + 1;
+    });
+
+    const topProducts = Object.entries(topMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name, count]) => ({ name, count }));
+
+    // last 14 days revenue
+    const days = buildLastNDaysSeries(14);
+    const revMap = Object.fromEntries(days.map((d) => [d, 0]));
+
+    orders.forEach((o) => {
+      const created = o.createdAt?.$date || o.createdAt;
+      if (!created) return;
+      const key = toISODateOnly(created);
+      if (!(key in revMap)) return;
+
+      if (normalizeStatus(o.orderStatus) === "approved") {
+        revMap[key] += Number(o.totalPrice) || 0;
+      }
+    });
+
+    const revenueByDay = days.map((d) => ({ date: d, revenue: revMap[d] }));
+
+    res.send({
+      productCount,
+      totalOrders,
+      byStatus,
+      revenue,
+      topProducts,
+      revenueByDay,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "Failed to load seller stats" });
+  }
+});
+
+//stats for admin
+
+app.get("/stats/admin", verifyJWT, verifyADMIN, async (req, res) => {
+  try {
+    const [usersTotal, productsTotal, orders] = await Promise.all([
+      usersCollection.countDocuments(),
+      productsCollection.countDocuments(),
+      ordersCollection.find().toArray(),
+    ]);
+
+    const ordersTotal = orders.length;
+
+    const byStatus = orders.reduce((acc, o) => {
+      const s = normalizeStatus(o.orderStatus);
+      acc[s] = (acc[s] || 0) + 1;
+      return acc;
+    }, {});
+
+    const revenue = orders
+      .filter((o) => normalizeStatus(o.orderStatus) === "approved")
+      .reduce((sum, o) => sum + (Number(o.totalPrice) || 0), 0);
+
+    // top categories by order count
+    const catMap = {};
+    orders.forEach((o) => {
+      const c = o.category || "Unknown";
+      catMap[c] = (catMap[c] || 0) + 1;
+    });
+    const topCategories = Object.entries(catMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([category, count]) => ({ category, count }));
+
+    // last 14 days order volume
+    const days = buildLastNDaysSeries(14);
+    const ordMap = Object.fromEntries(days.map((d) => [d, 0]));
+
+    orders.forEach((o) => {
+      const created = o.createdAt?.$date || o.createdAt;
+      if (!created) return;
+      const key = toISODateOnly(created);
+      if (key in ordMap) ordMap[key] += 1;
+    });
+
+    const ordersByDay = days.map((d) => ({ date: d, orders: ordMap[d] }));
+
+    res.send({
+      usersTotal,
+      productsTotal,
+      ordersTotal,
+      byStatus,
+      revenue,
+      topCategories,
+      ordersByDay,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "Failed to load admin stats" });
+  }
+});
+
+
+
+
+
+
+
+// Send a ping to confirm a successful connection
+    //await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
